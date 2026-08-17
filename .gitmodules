@@ -1,0 +1,6 @@
+[submodule "third_party/monocypher"]
+	path = third_party/monocypher
+	url = https://github.com/LoupVaillant/Monocypher
+[submodule "third_party/OpenCL-Headers"]
+	path = third_party/OpenCL-Headers
+	url = https://github.com/KhronosGroup/OpenCL-Headers
