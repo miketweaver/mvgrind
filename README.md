@@ -59,11 +59,17 @@ Three tricks get this from a crawl to ~172 M keys/s:
    the sequence differs from the last one by a fixed amount. So instead of
    rebuilding, we just take the previous key and nudge it forward, one cheap step
    (~9 steps of math) instead of 2550. This alone is roughly a 5x speedup.
+   Source: the one-step "nudge" is
+   [`mv_ge_add`](kernels/mv_edwards.h#L53) (a single elliptic-curve point
+   addition).
 
 3. **Share the most expensive step across a batch.** The one slow part left is a
    "division" that each key needs. There's a classic trick to do one division for
    a whole batch of keys instead of one per key. At a batch of 64, that expensive
    step nearly disappears, for another ~12x.
+   Source: the batched-inversion loop (forward products, one `fe_invert`,
+   backward pass) in
+   [`mv_grind_batch`](kernels/mv_grind.cl#L82-L105).
 
 Together: ~690x faster than the CPU. `--ladder` runs the old slow way and
 `--batch 1` turns off trick 3, so you can measure each step yourself with
