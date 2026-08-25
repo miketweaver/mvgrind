@@ -43,12 +43,18 @@ def load_key(text: str) -> bytes:
     return raw
 
 
+def app_color(nodenum: int) -> str:
+    """The apps paint a node with the low 24 bits of its id, read as RGB."""
+    return f"#{nodenum & 0xFFFFFF:06x}"
+
+
 def selftest() -> None:
     vectors = [b"", b"a", b"123456789", bytes(range(32)), b"\xff" * 32]
     for v in vectors:
         a, b = zlib.crc32(v) & 0xFFFFFFFF, crc32_erriez(v)
         assert a == b, f"CRC mismatch on {v!r}: zlib={a:08x} erriez={b:08x}"
     assert crc32_erriez(b"123456789") == 0xCBF43926, "check value wrong"
+    assert app_color(0xABDC143C) == "#dc143c", "app color is the low 24 bits"
     print("selftest ok: zlib.crc32 == ErriezCRC32 transcription, check value 0xcbf43926")
 
 
@@ -72,6 +78,7 @@ def main() -> None:
     print(f"priv base64 : {base64.b64encode(sk).decode()}")
     print(f"pub  base64 : {base64.b64encode(pk).decode()}")
     print(f"node id     : !{zid:08x}")
+    print(f"app color   : {app_color(zid)}")
     print(f"clamped     : {'yes' if is_clamped(sk) else 'NO, firmware XEdDSA will break'}")
     if not is_clamped(sk):
         sys.exit(2)
