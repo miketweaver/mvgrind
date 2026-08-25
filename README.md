@@ -51,11 +51,11 @@ Verify a key independently (PyNaCl + zlib, shares no code with the grinder):
 
 ## Colors
 
-Every client paints a node with the low 24 bits of its id, read straight as
-RGB — [Android](https://github.com/meshtastic/Meshtastic-Android/blob/main/core/model/src/commonMain/kotlin/org/meshtastic/core/model/NodeColors.kt)
+Every client paints a node with the low 24 bits of its id, read straight as RGB.
+[Android](https://github.com/meshtastic/Meshtastic-Android/blob/main/core/model/src/commonMain/kotlin/org/meshtastic/core/model/NodeColors.kt)
 and [Apple](https://github.com/meshtastic/Meshtastic-Apple/blob/main/Meshtastic/Extensions/Color.swift)
 agree on the formula. So `!8adc143c` is crimson, and picking a color is just
-another pattern over the id — `--color` compiles one for you.
+another pattern over the id, and `--color` compiles one for you.
 
 `--color` takes `#rrggbb`, `#rgb`, or any of the 148 CSS color names. `--tol N`
 widens it to anything within N per channel, which costs nothing extra to check

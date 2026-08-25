@@ -523,7 +523,7 @@ static int mv_chan_allowed(uint8_t *out, int lo, int hi, uint32_t pmask, uint32_
     return n;
 }
 
-/* Fold a color box -- every RGB within +/-tol of c, clamped to 0..255 -- into
+/* Fold a color box (every RGB within +/-tol of c, clamped to 0..255) into
  * *p, which may already hold an id pattern (and may be empty). The two can
  * overlap: id nibbles 3-8 are the color channels, so 'dc80' pins red to 0x80. */
 static int mv_pattern_apply_color(mv_pattern *p, mv_color c, int tol, char *msg, size_t msglen)
