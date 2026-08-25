@@ -45,6 +45,30 @@ Verify a key independently (PyNaCl + zlib, shares no code with the grinder):
 ./tools/mvverify.py <private-key-hex-or-base64>
 ```
 
+## Speed tricks
+
+Grinding means making millions of keypairs a second and checking each one's id.
+Three tricks get this from a crawl to ~172 M keys/s:
+
+1. **Run it on the GPU.** A GPU has thousands of tiny cores. Each one grinds its
+   own slice of the search at the same time, so we test thousands of keys in
+   parallel instead of one at a time on the CPU.
+
+2. **Don't build each key from scratch.** Normally every key needs a long, full
+   calculation (~2550 steps of math). But we pick keys in order, and each key in
+   the sequence differs from the last one by a fixed amount. So instead of
+   rebuilding, we just take the previous key and nudge it forward, one cheap step
+   (~9 steps of math) instead of 2550. This alone is roughly a 5x speedup.
+
+3. **Share the most expensive step across a batch.** The one slow part left is a
+   "division" that each key needs. There's a classic trick to do one division for
+   a whole batch of keys instead of one per key. At a batch of 64, that expensive
+   step nearly disappears, for another ~12x.
+
+Together: ~690x faster than the CPU. `--ladder` runs the old slow way and
+`--batch 1` turns off trick 3, so you can measure each step yourself with
+`--bench`.
+
 ## Notes
 
 - Keys are seeded from `getrandom(2)` per run: full 256-bit entropy, different
