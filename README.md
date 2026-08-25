@@ -27,6 +27,10 @@ Already cloned without `--recursive`? Run `git submodule update --init --recursi
 ./mvgrind dc801051              # exact id
 ./mvgrind 'dc80****'            # wildcard nibbles
 ./mvgrind 'dc80,801f,d0f0'      # a set: any match wins, no extra cost
+./mvgrind --color crimson       # a node the apps paint crimson
+./mvgrind --color '#dc143c'     # the same, by hex
+./mvgrind dc --color crimson    # both: id starts !dc, and it's crimson
+./mvgrind --color teal --tol 6  # near enough to teal, 2000x fewer keys
 ./mvgrind --list                # enumerate OpenCL devices
 ./mvgrind --selftest            # CPU vectors + CPU/GPU differential
 ./mvgrind dc80 --bench 20       # measure throughput
@@ -44,6 +48,39 @@ Verify a key independently (PyNaCl + zlib, shares no code with the grinder):
 ```sh
 ./tools/mvverify.py <private-key-hex-or-base64>
 ```
+
+## Colors
+
+Every client paints a node with the low 24 bits of its id, read straight as
+RGB — [Android](https://github.com/meshtastic/Meshtastic-Android/blob/main/core/model/src/commonMain/kotlin/org/meshtastic/core/model/NodeColors.kt)
+and [Apple](https://github.com/meshtastic/Meshtastic-Apple/blob/main/Meshtastic/Extensions/Color.swift)
+agree on the formula. So `!8adc143c` is crimson, and picking a color is just
+another pattern over the id — `--color` compiles one for you.
+
+`--color` takes `#rrggbb`, `#rgb`, or any of the 148 CSS color names. `--tol N`
+widens it to anything within N per channel, which costs nothing extra to check
+and finds a hit sooner:
+
+| grind | keys (mean) | ~time at 172 M/s |
+| --- | --- | --- |
+| `--color crimson` | 16.8 M | 0.1 s |
+| `--color crimson --tol 6` | 7.6 K | instant |
+| `dc --color crimson` | 4.3 G | 25 s |
+| `dc --color crimson --tol 6` | 2.0 M | 0.01 s |
+
+The two patterns share bits: id nibbles 3-8 **are** the color channels, so
+`dc80` already pins red to `0x80`. Ask for a color it can't be and mvgrind says
+so up front rather than grinding forever:
+
+```
+$ ./mvgrind dc80 --color crimson
+the id pattern and that color disagree on the red channel:
+the pattern needs (byte & 0xff) == 0x80, the color needs 0xdc
+```
+
+Tolerance is capped by the 4096 targets the GPU holds: `--tol 7` is the widest
+box that fits when all three channels are free, and much wider once an id
+prefix pins one of them.
 
 ## Speed tricks
 

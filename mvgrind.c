@@ -32,6 +32,7 @@
 #define MV_GE_INTS 40
 #define MV_MAX_DEVICES 16
 #define MV_OUT_CAP 256
+#define MV_MAX_TARGETS 4096
 
 /* ------------------------------------------------------------------------- */
 /* Incremental (Edwards) walk: secrets are base + 8k, so consecutive public   */
@@ -224,6 +225,498 @@ static double mv_pattern_expected_keys(const mv_pattern *p)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Colors: every client paints a node with the low 24 bits of its NodeNum as  */
+/* RGB, so a chosen color is just a pattern over those bits.                  */
+/* ------------------------------------------------------------------------- */
+
+#define MV_COLOR_MASK 0x00FFFFFFu
+
+typedef struct {
+    uint8_t r, g, b;
+} mv_color;
+
+/* The 148 CSS Color Module Level 4 keywords, sorted for bsearch. */
+typedef struct {
+    const char *name;
+    uint32_t rgb;
+} mv_css_color;
+
+static const mv_css_color mv_css_colors[] = {
+    {"aliceblue", 0xf0f8ff},
+    {"antiquewhite", 0xfaebd7},
+    {"aqua", 0x00ffff},
+    {"aquamarine", 0x7fffd4},
+    {"azure", 0xf0ffff},
+    {"beige", 0xf5f5dc},
+    {"bisque", 0xffe4c4},
+    {"black", 0x000000},
+    {"blanchedalmond", 0xffebcd},
+    {"blue", 0x0000ff},
+    {"blueviolet", 0x8a2be2},
+    {"brown", 0xa52a2a},
+    {"burlywood", 0xdeb887},
+    {"cadetblue", 0x5f9ea0},
+    {"chartreuse", 0x7fff00},
+    {"chocolate", 0xd2691e},
+    {"coral", 0xff7f50},
+    {"cornflowerblue", 0x6495ed},
+    {"cornsilk", 0xfff8dc},
+    {"crimson", 0xdc143c},
+    {"cyan", 0x00ffff},
+    {"darkblue", 0x00008b},
+    {"darkcyan", 0x008b8b},
+    {"darkgoldenrod", 0xb8860b},
+    {"darkgray", 0xa9a9a9},
+    {"darkgreen", 0x006400},
+    {"darkgrey", 0xa9a9a9},
+    {"darkkhaki", 0xbdb76b},
+    {"darkmagenta", 0x8b008b},
+    {"darkolivegreen", 0x556b2f},
+    {"darkorange", 0xff8c00},
+    {"darkorchid", 0x9932cc},
+    {"darkred", 0x8b0000},
+    {"darksalmon", 0xe9967a},
+    {"darkseagreen", 0x8fbc8f},
+    {"darkslateblue", 0x483d8b},
+    {"darkslategray", 0x2f4f4f},
+    {"darkslategrey", 0x2f4f4f},
+    {"darkturquoise", 0x00ced1},
+    {"darkviolet", 0x9400d3},
+    {"deeppink", 0xff1493},
+    {"deepskyblue", 0x00bfff},
+    {"dimgray", 0x696969},
+    {"dimgrey", 0x696969},
+    {"dodgerblue", 0x1e90ff},
+    {"firebrick", 0xb22222},
+    {"floralwhite", 0xfffaf0},
+    {"forestgreen", 0x228b22},
+    {"fuchsia", 0xff00ff},
+    {"gainsboro", 0xdcdcdc},
+    {"ghostwhite", 0xf8f8ff},
+    {"gold", 0xffd700},
+    {"goldenrod", 0xdaa520},
+    {"gray", 0x808080},
+    {"green", 0x008000},
+    {"greenyellow", 0xadff2f},
+    {"grey", 0x808080},
+    {"honeydew", 0xf0fff0},
+    {"hotpink", 0xff69b4},
+    {"indianred", 0xcd5c5c},
+    {"indigo", 0x4b0082},
+    {"ivory", 0xfffff0},
+    {"khaki", 0xf0e68c},
+    {"lavender", 0xe6e6fa},
+    {"lavenderblush", 0xfff0f5},
+    {"lawngreen", 0x7cfc00},
+    {"lemonchiffon", 0xfffacd},
+    {"lightblue", 0xadd8e6},
+    {"lightcoral", 0xf08080},
+    {"lightcyan", 0xe0ffff},
+    {"lightgoldenrodyellow", 0xfafad2},
+    {"lightgray", 0xd3d3d3},
+    {"lightgreen", 0x90ee90},
+    {"lightgrey", 0xd3d3d3},
+    {"lightpink", 0xffb6c1},
+    {"lightsalmon", 0xffa07a},
+    {"lightseagreen", 0x20b2aa},
+    {"lightskyblue", 0x87cefa},
+    {"lightslategray", 0x778899},
+    {"lightslategrey", 0x778899},
+    {"lightsteelblue", 0xb0c4de},
+    {"lightyellow", 0xffffe0},
+    {"lime", 0x00ff00},
+    {"limegreen", 0x32cd32},
+    {"linen", 0xfaf0e6},
+    {"magenta", 0xff00ff},
+    {"maroon", 0x800000},
+    {"mediumaquamarine", 0x66cdaa},
+    {"mediumblue", 0x0000cd},
+    {"mediumorchid", 0xba55d3},
+    {"mediumpurple", 0x9370db},
+    {"mediumseagreen", 0x3cb371},
+    {"mediumslateblue", 0x7b68ee},
+    {"mediumspringgreen", 0x00fa9a},
+    {"mediumturquoise", 0x48d1cc},
+    {"mediumvioletred", 0xc71585},
+    {"midnightblue", 0x191970},
+    {"mintcream", 0xf5fffa},
+    {"mistyrose", 0xffe4e1},
+    {"moccasin", 0xffe4b5},
+    {"navajowhite", 0xffdead},
+    {"navy", 0x000080},
+    {"oldlace", 0xfdf5e6},
+    {"olive", 0x808000},
+    {"olivedrab", 0x6b8e23},
+    {"orange", 0xffa500},
+    {"orangered", 0xff4500},
+    {"orchid", 0xda70d6},
+    {"palegoldenrod", 0xeee8aa},
+    {"palegreen", 0x98fb98},
+    {"paleturquoise", 0xafeeee},
+    {"palevioletred", 0xdb7093},
+    {"papayawhip", 0xffefd5},
+    {"peachpuff", 0xffdab9},
+    {"peru", 0xcd853f},
+    {"pink", 0xffc0cb},
+    {"plum", 0xdda0dd},
+    {"powderblue", 0xb0e0e6},
+    {"purple", 0x800080},
+    {"rebeccapurple", 0x663399},
+    {"red", 0xff0000},
+    {"rosybrown", 0xbc8f8f},
+    {"royalblue", 0x4169e1},
+    {"saddlebrown", 0x8b4513},
+    {"salmon", 0xfa8072},
+    {"sandybrown", 0xf4a460},
+    {"seagreen", 0x2e8b57},
+    {"seashell", 0xfff5ee},
+    {"sienna", 0xa0522d},
+    {"silver", 0xc0c0c0},
+    {"skyblue", 0x87ceeb},
+    {"slateblue", 0x6a5acd},
+    {"slategray", 0x708090},
+    {"slategrey", 0x708090},
+    {"snow", 0xfffafa},
+    {"springgreen", 0x00ff7f},
+    {"steelblue", 0x4682b4},
+    {"tan", 0xd2b48c},
+    {"teal", 0x008080},
+    {"thistle", 0xd8bfd8},
+    {"tomato", 0xff6347},
+    {"turquoise", 0x40e0d0},
+    {"violet", 0xee82ee},
+    {"wheat", 0xf5deb3},
+    {"white", 0xffffff},
+    {"whitesmoke", 0xf5f5f5},
+    {"yellow", 0xffff00},
+    {"yellowgreen", 0x9acd32},
+};
+
+static int mv_hexdigit(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+/* Fold to the table's spelling: lowercase, letters and digits only, so
+ * "Dark Slate Blue", "dark-slate-blue" and "darkslateblue" all land. */
+static int mv_color_fold(char *dst, size_t cap, const char *src)
+{
+    size_t o = 0;
+    for (; *src; src++) {
+        char c = *src;
+        if (c == ' ' || c == '-' || c == '_')
+            continue;
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c - 'A' + 'a');
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')))
+            return -1;
+        if (o + 1 >= cap)
+            return -1;
+        dst[o++] = c;
+    }
+    dst[o] = 0;
+    return o ? 0 : -1;
+}
+
+static int mv_color_cmp(const void *key, const void *ent)
+{
+    return strcmp((const char *)key, ((const mv_css_color *)ent)->name);
+}
+
+static mv_color mv_color_from_u32(uint32_t rgb)
+{
+    mv_color c;
+    c.r = (uint8_t)(rgb >> 16);
+    c.g = (uint8_t)(rgb >> 8);
+    c.b = (uint8_t)rgb;
+    return c;
+}
+
+static uint32_t mv_color_to_u32(mv_color c)
+{
+    return ((uint32_t)c.r << 16) | ((uint32_t)c.g << 8) | c.b;
+}
+
+/* Accepts "#rrggbb", "#rgb", the bare hex forms, and any CSS color keyword. */
+static int mv_color_parse(const char *spec, mv_color *out, char *msg, size_t msglen)
+{
+    if (!spec || !*spec) {
+        if (msg)
+            snprintf(msg, msglen, "empty color");
+        return -1;
+    }
+    while (*spec == ' ')
+        spec++;
+
+    int forced_hex = (*spec == '#');
+    const char *h = forced_hex ? spec + 1 : spec;
+    size_t n = strlen(h);
+
+    if (!forced_hex) {
+        char fold[64];
+        if (mv_color_fold(fold, sizeof fold, spec) == 0) {
+            const void *hit = bsearch(fold, mv_css_colors, sizeof(mv_css_colors) / sizeof(mv_css_colors[0]),
+                                      sizeof(mv_css_colors[0]), mv_color_cmp);
+            if (hit) {
+                *out = mv_color_from_u32(((const mv_css_color *)hit)->rgb);
+                return 0;
+            }
+        }
+    }
+
+    if (n != 3 && n != 6) {
+        if (msg)
+            snprintf(msg, msglen, "'%s': not a CSS color name, and hex needs 3 or 6 digits", spec);
+        return -1;
+    }
+    int d[6];
+    for (size_t i = 0; i < n; i++) {
+        d[i] = mv_hexdigit(h[i]);
+        if (d[i] < 0) {
+            if (msg)
+                snprintf(msg, msglen, "'%s': bad hex digit '%c'", spec, h[i]);
+            return -1;
+        }
+    }
+    if (n == 3) {
+        out->r = (uint8_t)(d[0] * 17);
+        out->g = (uint8_t)(d[1] * 17);
+        out->b = (uint8_t)(d[2] * 17);
+    } else {
+        out->r = (uint8_t)(d[0] * 16 + d[1]);
+        out->g = (uint8_t)(d[2] * 16 + d[3]);
+        out->b = (uint8_t)(d[4] * 16 + d[5]);
+    }
+    return 0;
+}
+
+static mv_color mv_color_of_nodenum(uint32_t nodenum)
+{
+    return mv_color_from_u32(nodenum & MV_COLOR_MASK);
+}
+
+/* "#dc143c", optionally followed by a truecolor swatch when stdout is a tty. */
+static void mv_color_fmt(char *dst, size_t cap, mv_color c, int swatch)
+{
+    if (swatch)
+        snprintf(dst, cap, "#%02x%02x%02x  \033[48;2;%u;%u;%um    \033[0m", c.r, c.g, c.b, c.r, c.g, c.b);
+    else
+        snprintf(dst, cap, "#%02x%02x%02x", c.r, c.g, c.b);
+}
+
+static const char *const mv_chan_name[3] = {"red", "green", "blue"};
+static const int mv_chan_shift[3] = {16, 8, 0};
+
+/* Values in lo..hi that also satisfy the id pattern's bits for this channel. */
+static int mv_chan_allowed(uint8_t *out, int lo, int hi, uint32_t pmask, uint32_t pval)
+{
+    int n = 0;
+    for (int x = lo; x <= hi; x++)
+        if (((uint32_t)x & pmask) == (pval & pmask))
+            out[n++] = (uint8_t)x;
+    return n;
+}
+
+/* Fold a color box -- every RGB within +/-tol of c, clamped to 0..255 -- into
+ * *p, which may already hold an id pattern (and may be empty). The two can
+ * overlap: id nibbles 3-8 are the color channels, so 'dc80' pins red to 0x80. */
+static int mv_pattern_apply_color(mv_pattern *p, mv_color c, int tol, char *msg, size_t msglen)
+{
+    if (tol < 0 || tol > 255) {
+        if (msg)
+            snprintf(msg, msglen, "tolerance must be 0-255 (got %d)", tol);
+        return -1;
+    }
+
+    const uint8_t want[3] = {c.r, c.g, c.b};
+    int lo[3], hi[3];
+    for (int k = 0; k < 3; k++) {
+        lo[k] = want[k] - tol < 0 ? 0 : want[k] - tol;
+        hi[k] = want[k] + tol > 255 ? 255 : want[k] + tol;
+    }
+
+    const uint32_t id_mask = p->n_targets ? p->mask : 0;
+    const uint32_t none = 0;
+    const uint32_t *ids = p->n_targets ? p->targets : &none;
+    const uint32_t n_ids = p->n_targets ? p->n_targets : 1;
+
+    uint32_t *out = (uint32_t *)calloc(MV_MAX_TARGETS, sizeof(uint32_t));
+    if (!out) {
+        if (msg)
+            snprintf(msg, msglen, "out of memory");
+        return -1;
+    }
+
+    uint32_t n_out = 0;
+    int chan_ok[3] = {0, 0, 0};
+    for (uint32_t i = 0; i < n_ids; i++) {
+        uint8_t a[3][256];
+        int na[3];
+        uint64_t prod = 1;
+        for (int k = 0; k < 3; k++) {
+            const uint32_t pm = (id_mask >> mv_chan_shift[k]) & 0xFFu;
+            const uint32_t pv = (ids[i] >> mv_chan_shift[k]) & 0xFFu;
+            na[k] = mv_chan_allowed(a[k], lo[k], hi[k], pm, pv);
+            if (na[k])
+                chan_ok[k] = 1;
+            prod *= (uint64_t)na[k];
+        }
+        if (prod == 0)
+            continue;
+        if (n_out + prod > MV_MAX_TARGETS) {
+            if (msg)
+                snprintf(msg, msglen,
+                         "--tol %d needs more than %d targets, which is all the GPU "
+                         "will hold; use a tighter tolerance",
+                         tol, MV_MAX_TARGETS);
+            free(out);
+            return -1;
+        }
+        const uint32_t keep = ids[i] & ~MV_COLOR_MASK;
+        for (int ri = 0; ri < na[0]; ri++)
+            for (int gi = 0; gi < na[1]; gi++)
+                for (int bi = 0; bi < na[2]; bi++)
+                    out[n_out++] = keep | ((uint32_t)a[0][ri] << 16) | ((uint32_t)a[1][gi] << 8) | a[2][bi];
+    }
+
+    if (n_out == 0) {
+        int k = 0;
+        while (k < 3 && chan_ok[k])
+            k++;
+        if (msg && k < 3) {
+            const uint32_t pm = (id_mask >> mv_chan_shift[k]) & 0xFFu;
+            char wanted[16];
+            if (lo[k] == hi[k])
+                snprintf(wanted, sizeof wanted, "0x%02x", (unsigned)lo[k]);
+            else
+                snprintf(wanted, sizeof wanted, "0x%02x-0x%02x", (unsigned)lo[k], (unsigned)hi[k]);
+            snprintf(msg, msglen,
+                     "the id pattern and that color disagree on the %s channel: "
+                     "the pattern needs (byte & 0x%02x) == 0x%02x, the color needs %s",
+                     mv_chan_name[k], pm, (ids[0] >> mv_chan_shift[k]) & pm, wanted);
+        } else if (msg) {
+            snprintf(msg, msglen, "no node id satisfies both the id pattern and that color");
+        }
+        free(out);
+        return -1;
+    }
+
+    free(p->targets);
+    p->targets = out;
+    p->n_targets = n_out;
+    p->mask = id_mask | MV_COLOR_MASK;
+    return 0;
+}
+
+#define MV_CFAIL(...)                                                                                                            \
+    do {                                                                                                                         \
+        snprintf(err, errlen, __VA_ARGS__);                                                                                      \
+        mv_pattern_free(&p);                                                                                                     \
+        return -1;                                                                                                               \
+    } while (0)
+
+static int mv_selftest_color(char *err, size_t errlen)
+{
+    mv_pattern p;
+    memset(&p, 0, sizeof p);
+    char msg[256];
+
+    static const struct {
+        const char *spec;
+        uint32_t rgb;
+    } good[] = {
+        {"crimson", 0xdc143c},       {"CRIMSON", 0xdc143c}, {"Dark Slate Blue", 0x483d8b}, {"dark-slate_blue", 0x483d8b},
+        {"rebeccapurple", 0x663399}, {"#dc143c", 0xdc143c}, {"dc143c", 0xdc143c},          {"#f00", 0xff0000},
+        {"0f8", 0x00ff88},           {"#000", 0x000000},    {"white", 0xffffff},
+    };
+    for (size_t i = 0; i < sizeof(good) / sizeof(good[0]); i++) {
+        mv_color c;
+        if (mv_color_parse(good[i].spec, &c, msg, sizeof msg) != 0)
+            MV_CFAIL("color '%s' should parse (%s)", good[i].spec, msg);
+        if (mv_color_to_u32(c) != good[i].rgb)
+            MV_CFAIL("color '%s' gave %06x, want %06x", good[i].spec, mv_color_to_u32(c), good[i].rgb);
+    }
+
+    static const char *const bad[] = {"", "notacolor", "#12345", "#gg0000", "#dc143c1", "12 34"};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        mv_color c;
+        if (mv_color_parse(bad[i], &c, msg, sizeof msg) == 0)
+            MV_CFAIL("color '%s' should have been rejected", bad[i]);
+    }
+
+    if (mv_color_to_u32(mv_color_of_nodenum(0xabdc143cu)) != 0xdc143c)
+        MV_CFAIL("nodenum -> color is not the low 24 bits");
+
+    /* Color alone: the low 24 bits, nothing else. */
+    const mv_color crimson = mv_color_from_u32(0xdc143c);
+    if (mv_pattern_apply_color(&p, crimson, 0, msg, sizeof msg) != 0)
+        MV_CFAIL("exact color should compile (%s)", msg);
+    if (p.mask != MV_COLOR_MASK || p.n_targets != 1 || p.targets[0] != 0x00dc143cu)
+        MV_CFAIL("exact color gave mask %08x / %u targets", p.mask, p.n_targets);
+    if (!mv_pattern_match(&p, 0xffdc143cu) || mv_pattern_match(&p, 0xffdc143du))
+        MV_CFAIL("exact color matches the wrong ids");
+    mv_pattern_free(&p);
+
+    /* A tolerance box is (2t+1)^3 targets, clamped at the ends of each channel. */
+    if (mv_pattern_apply_color(&p, crimson, 1, msg, sizeof msg) != 0 || p.n_targets != 27)
+        MV_CFAIL("+/-1 box should be 27 targets, got %u", p.n_targets);
+    mv_pattern_free(&p);
+    if (mv_pattern_apply_color(&p, mv_color_from_u32(0x000000), 2, msg, sizeof msg) != 0 || p.n_targets != 27)
+        MV_CFAIL("black +/-2 should clamp to 27 targets, got %u", p.n_targets);
+    mv_pattern_free(&p);
+    if (mv_pattern_apply_color(&p, mv_color_from_u32(0xffffff), 2, msg, sizeof msg) != 0 || p.n_targets != 27)
+        MV_CFAIL("white +/-2 should clamp to 27 targets, got %u", p.n_targets);
+    mv_pattern_free(&p);
+    if (mv_pattern_apply_color(&p, crimson, 8, msg, sizeof msg) == 0)
+        MV_CFAIL("+/-8 (4913 targets) should exceed the target cap");
+    mv_pattern_free(&p);
+
+    /* An id prefix short enough to miss the color channels combines cleanly. */
+    if (mv_pattern_parse(&p, "dc", msg, sizeof msg) != 0)
+        MV_CFAIL("pattern 'dc' should parse (%s)", msg);
+    if (mv_pattern_apply_color(&p, crimson, 0, msg, sizeof msg) != 0)
+        MV_CFAIL("'dc' + crimson should compile (%s)", msg);
+    if (p.mask != 0xFFFFFFFFu || p.n_targets != 1 || p.targets[0] != 0xdcdc143cu)
+        MV_CFAIL("'dc' + crimson gave mask %08x / %u targets / %08x", p.mask, p.n_targets, p.targets[0]);
+    mv_pattern_free(&p);
+
+    /* Nibbles 3-8 are the color channels, so a longer prefix can contradict it. */
+    if (mv_pattern_parse(&p, "dc80", msg, sizeof msg) != 0)
+        MV_CFAIL("pattern 'dc80' should parse (%s)", msg);
+    if (mv_pattern_apply_color(&p, crimson, 0, msg, sizeof msg) == 0)
+        MV_CFAIL("'dc80' pins red to 0x80 and must not accept crimson");
+    mv_pattern_free(&p);
+
+    /* ...and agree when it matches. */
+    if (mv_pattern_parse(&p, "dcdc", msg, sizeof msg) != 0)
+        MV_CFAIL("pattern 'dcdc' should parse (%s)", msg);
+    if (mv_pattern_apply_color(&p, crimson, 0, msg, sizeof msg) != 0)
+        MV_CFAIL("'dcdc' + crimson should compile (%s)", msg);
+    if (p.n_targets != 1 || p.targets[0] != 0xdcdc143cu)
+        MV_CFAIL("'dcdc' + crimson gave %u targets / %08x", p.n_targets, p.targets[0]);
+    mv_pattern_free(&p);
+
+    /* Tolerance survives a pinned channel: red fixed, green and blue free. */
+    if (mv_pattern_parse(&p, "dcdc", msg, sizeof msg) != 0)
+        MV_CFAIL("pattern 'dcdc' should parse (%s)", msg);
+    if (mv_pattern_apply_color(&p, crimson, 8, msg, sizeof msg) != 0)
+        MV_CFAIL("'dcdc' + crimson +/-8 should compile (%s)", msg);
+    if (p.n_targets != 17 * 17)
+        MV_CFAIL("'dcdc' + crimson +/-8 should be 289 targets, got %u", p.n_targets);
+    mv_pattern_free(&p);
+
+    return 0;
+}
+
+#undef MV_CFAIL
+
+/* ------------------------------------------------------------------------- */
 /* CPU self-test                                                              */
 /* ------------------------------------------------------------------------- */
 
@@ -273,7 +766,7 @@ static int mv_selftest_cpu(char *err, size_t errlen)
         snprintf(err, errlen, "clamp/is_clamped disagree");
         return -1;
     }
-    return 0;
+    return mv_selftest_color(err, errlen);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -676,7 +1169,7 @@ static int dev_init(struct mv_dev *d, cl_device_id id, const char *src, const mv
 
     d->m_base = clCreateBuffer(d->ctx, CL_MEM_READ_ONLY, 32, NULL, &e);
     CHECK(e, "alloc base");
-    d->m_targets = clCreateBuffer(d->ctx, CL_MEM_READ_ONLY, sizeof(cl_uint) * 4096, NULL, &e);
+    d->m_targets = clCreateBuffer(d->ctx, CL_MEM_READ_ONLY, sizeof(cl_uint) * MV_MAX_TARGETS, NULL, &e);
     CHECK(e, "alloc targets");
     d->m_count = clCreateBuffer(d->ctx, CL_MEM_READ_WRITE, sizeof(cl_uint), NULL, &e);
     CHECK(e, "alloc count");
@@ -915,8 +1408,8 @@ static int fill_random(uint8_t *buf, size_t n, char *err, size_t errlen)
 static long mv_run(mv_ctx *c, const mv_pattern *pat, mv_hit_cb on_hit, mv_progress_cb on_prog, void *user, volatile int *stop,
                    char *err, size_t errlen)
 {
-    if (pat->n_targets > 4096) {
-        snprintf(err, errlen, "too many targets (%u > 4096)", pat->n_targets);
+    if (pat->n_targets > MV_MAX_TARGETS) {
+        snprintf(err, errlen, "too many targets (%u > %d)", pat->n_targets, MV_MAX_TARGETS);
         return -1;
     }
 
@@ -1124,8 +1617,14 @@ static int on_hit(const mv_hit *h, void *user)
     b64(pkb, h->pub, 32);
     snprintf(idb, sizeof idb, "!%08x", h->nodenum);
 
+    const mv_color hc = mv_color_of_nodenum(h->nodenum);
+    char cpretty[64], cplain[8];
+    mv_color_fmt(cpretty, sizeof cpretty, hc, isatty(fileno(stdout)));
+    mv_color_fmt(cplain, sizeof cplain, hc, 0);
+
     printf("\n\n=== HIT (device %d) ===\n", h->device_index);
     printf("node id     : %s\n", idb);
+    printf("app color   : %s\n", cpretty);
     printf("private key : %s\n", skh);
     printf("public key  : %s\n", pkh);
     printf("priv base64 : %s\n", skb);
@@ -1137,9 +1636,9 @@ static int on_hit(const mv_hit *h, void *user)
         FILE *f = fopen(a->outpath, "a");
         if (f) {
             fprintf(f,
-                    "node_id=%s\nprivate_key_hex=%s\npublic_key_hex=%s\n"
+                    "node_id=%s\napp_color=%s\nprivate_key_hex=%s\npublic_key_hex=%s\n"
                     "private_key_b64=%s\npublic_key_b64=%s\n\n",
-                    idb, skh, pkh, skb, pkb);
+                    idb, cplain, skh, pkh, skb, pkb);
             fclose(f);
         }
     }
@@ -1171,13 +1670,20 @@ static void usage(const char *p)
 {
     fprintf(stderr,
             "mvgrind: GPU vanity NodeNum grinder for Meshtastic\n\n"
-            "usage: %s <pattern> [options]\n\n"
+            "usage: %s [pattern] [options]\n\n"
             "pattern:\n"
             "  dc801051         exact node id (a leading '!' is fine)\n"
             "  dc80             prefix: top 4 hex digits\n"
             "  dc80****         explicit wildcard nibbles ('*', '?', '.')\n"
-            "  dc80,801f,d0f0   a set; any match wins, at no extra cost\n\n"
+            "  dc80,801f,d0f0   a set; any match wins, at no extra cost\n"
+            "  (omit it entirely when you only care about --color)\n\n"
+            "color:\n"
+            "  the apps paint a node with the low 24 bits of its id as RGB, so\n"
+            "  --color is a pattern over those bits and combines with the one above\n"
+            "  (id nibbles 3-8 ARE the channels: 'dc80' already pins red to 0x80)\n\n"
             "options:\n"
+            "  -c, --color SPEC   #rrggbb, #rgb, or any CSS color name\n"
+            "      --tol N        accept +/-N per channel (default 0, exact)\n"
             "  -d, --device N     device index (default: every GPU)\n"
             "  -n, --count N      stop after N hits (default 1, 0 = never)\n"
             "  -o, --out FILE     append hits to FILE (default found.txt)\n"
@@ -1214,6 +1720,8 @@ int main(int argc, char **argv)
     app.want = 1;
 
     const char *pattern = NULL;
+    const char *colorspec = NULL;
+    int tol = 0, have_tol = 0;
     int do_list = 0, do_selftest = 0;
     double bench = 0;
 
@@ -1241,7 +1749,12 @@ int main(int argc, char **argv)
             app.outpath = NEXT();
         else if (!strcmp(a, "-b") || !strcmp(a, "--bench"))
             bench = atof(NEXT());
-        else if (!strcmp(a, "--ladder"))
+        else if (!strcmp(a, "-c") || !strcmp(a, "--color"))
+            colorspec = NEXT();
+        else if (!strcmp(a, "--tol") || !strcmp(a, "--tolerance")) {
+            tol = atoi(NEXT());
+            have_tol = 1;
+        } else if (!strcmp(a, "--ladder"))
             o.use_ladder = 1;
         else if (!strcmp(a, "--batch"))
             o.batch = (unsigned)atoi(NEXT());
@@ -1272,7 +1785,7 @@ int main(int argc, char **argv)
     }
 
     if (do_selftest) {
-        printf("cpu  : ok (RFC 7748 vectors, CRC-32 check value, clamp round-trip)\n");
+        printf("cpu  : ok (RFC 7748 vectors, CRC-32 check value, clamp round-trip, color patterns)\n");
         mv_ctx *c = mv_open(&o, err, sizeof err);
         if (!c) {
             fprintf(stderr, "mv_open: %s\n", err);
@@ -1288,16 +1801,35 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (!pattern) {
+    if (!pattern && !colorspec) {
         usage(argv[0]);
+        return 1;
+    }
+    if (have_tol && !colorspec) {
+        fprintf(stderr, "--tol only means something alongside --color\n");
         return 1;
     }
 
     mv_pattern pat;
+    memset(&pat, 0, sizeof pat);
     char msg[256];
-    if (mv_pattern_parse(&pat, pattern, msg, sizeof msg) != 0) {
+    if (pattern && mv_pattern_parse(&pat, pattern, msg, sizeof msg) != 0) {
         fprintf(stderr, "bad pattern: %s\n", msg);
         return 1;
+    }
+
+    mv_color color = {0, 0, 0};
+    if (colorspec) {
+        if (mv_color_parse(colorspec, &color, msg, sizeof msg) != 0) {
+            fprintf(stderr, "bad color: %s\n", msg);
+            mv_pattern_free(&pat);
+            return 1;
+        }
+        if (mv_pattern_apply_color(&pat, color, tol, msg, sizeof msg) != 0) {
+            fprintf(stderr, "%s\n", msg);
+            mv_pattern_free(&pat);
+            return 1;
+        }
     }
     g_expected = mv_pattern_expected_keys(&pat);
 
@@ -1317,7 +1849,16 @@ int main(int argc, char **argv)
 
     mv_device_info info[16];
     int nd = mv_list_devices(info, 16);
-    printf("pattern     : %s  (mask %08x, %u target%s)\n", pattern, pat.mask, pat.n_targets, pat.n_targets == 1 ? "" : "s");
+    printf("pattern     : %s  (mask %08x, %u target%s)\n", pattern ? pattern : "(any id)", pat.mask, pat.n_targets,
+           pat.n_targets == 1 ? "" : "s");
+    if (colorspec) {
+        char cb[64];
+        mv_color_fmt(cb, sizeof cb, color, isatty(fileno(stdout)));
+        printf("color       : %s", cb);
+        if (tol)
+            printf("   +/-%d per channel", tol);
+        printf("\n");
+    }
     printf("expected    : %.4g keys (mean)\n", g_expected);
     for (int i = 0; i < nd; i++)
         if (o.device_index < 0 ? info[i].is_gpu : i == o.device_index)
