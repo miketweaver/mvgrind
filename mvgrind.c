@@ -17,7 +17,13 @@
 #if defined(__has_include)
 #if __has_include(<sys/random.h>)
 #include <sys/random.h>
+/* macOS ships <sys/random.h> but declares getentropy(), not getrandom(2), so the
+ * header alone does not tell you which one you have. */
+#if defined(__APPLE__)
+#define MV_HAVE_GETENTROPY 1
+#else
 #define MV_HAVE_GETRANDOM 1
+#endif
 #endif
 #endif
 
@@ -1360,7 +1366,7 @@ static int mv_selftest_gpu(mv_ctx *c, unsigned n, char *err, size_t errlen)
 /* Key security rests on this read: a low-entropy seed (time, PID, counter)
  * makes every key this grinder produces re-derivable by anyone who brute-forces
  * the seed. Only a real CSPRNG here: getrandom() blocks until the pool is
- * seeded; both paths fail closed. */
+ * seeded, getentropy() is the same guarantee on macOS; all paths fail closed. */
 static int fill_random(uint8_t *buf, size_t n, char *err, size_t errlen)
 {
     int have = 0;
@@ -1377,6 +1383,19 @@ static int fill_random(uint8_t *buf, size_t n, char *err, size_t errlen)
         off += (size_t)r;
     }
     have = (off == n);
+#endif
+
+#ifdef MV_HAVE_GETENTROPY
+    size_t got_off = 0;
+    while (got_off < n) {
+        /* getentropy() takes at most 256 bytes per call and either fills the
+         * whole request or fails; there is no short read to resume from. */
+        size_t chunk = (n - got_off) > 256 ? 256 : (n - got_off);
+        if (getentropy(buf + got_off, chunk) != 0)
+            break;
+        got_off += chunk;
+    }
+    have = (got_off == n);
 #endif
 
     if (!have) {

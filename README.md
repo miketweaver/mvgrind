@@ -17,7 +17,8 @@ cd mvgrind && make
 make test
 ```
 
-Needs a C compiler, `make`, `python3`, and your GPU vendor's OpenCL driver.
+Needs a C compiler, `make`, `python3`, and your GPU vendor's OpenCL driver — on
+macOS the system OpenCL framework is that driver, so nothing extra to install.
 Already cloned without `--recursive`? Run `git submodule update --init --recursive`.
 
 ## Use
